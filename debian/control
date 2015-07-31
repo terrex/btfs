@@ -1,0 +1,21 @@
+Source: btfs
+Section: net
+Priority: optional
+Maintainer: Johan Gunnarsson <johan.gunnarsson@gmail.com>
+Build-Depends: debhelper (>= 9),
+               autotools-dev,
+               libfuse-dev (>= 2.8.0),
+               libtorrent-rasterbar-dev (>= 0.16.0),
+               libcurl4-openssl-dev
+Standards-Version: 3.9.5
+Homepage: https://github.com/johang/btfs
+Vcs-Git: https://github.com/johang/btfs.git
+Vcs-Browser: https://github.com/johang/btfs
+
+Package: btfs
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Bittorrent filesystem
+ With BTFS, you can mount any .torrent file or magnet link and then use it as
+ any read-only directory in your file tree. The contents of the files will be
+ downloaded on-demand as they are read by applications.
