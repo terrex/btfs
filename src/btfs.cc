@@ -53,7 +53,7 @@ std::list<Read*> reads;
 // First piece index of the current sliding window
 int cursor;
 
-std::map<std::string,std::pair<libtorrent::file_entry,int> > files;
+std::map<std::string,int> files;
 std::map<std::string,std::set<std::string> > dirs;
 
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -82,10 +82,7 @@ jump(int piece, int size) {
 
 	int pl = handle.get_torrent_info().piece_length();
 
-	for (int b = 0; b < 0x200000; b += pl) {
-		if (!move_to_next_unfinished(tail))
-			return;
-
+	for (int b = 0; b < 16 * pl; b += pl) {
 		handle.piece_priority(tail++, 7);
 	}
 
@@ -102,7 +99,9 @@ advance() {
 Read::Read(char *buf, int index, int offset, int size) {
 	libtorrent::torrent_info metadata = handle.get_torrent_info();
 
-	while (size > 0 && offset < metadata.file_at(index).size) {
+	libtorrent::file_entry file = metadata.file_at(index);
+
+	while (size > 0 && offset < file.size) {
 		libtorrent::peer_request part = metadata.map_file(index,
 			offset, size);
 
@@ -204,8 +203,7 @@ setup() {
 		free(p);
 
 		// Path <-> file index mapping
-		files["/" + ti.file_at(i).path] = std::make_pair(
-			ti.file_at(i), i);
+		files["/" + ti.file_at(i).path] = i;
 	}
 }
 
@@ -344,8 +342,11 @@ btfs_getattr(const char *path, struct stat *stbuf) {
 	if (strcmp(path, "/") == 0 || is_dir(path)) {
 		stbuf->st_mode = S_IFDIR | 0755;
 	} else {
+		libtorrent::file_entry file =
+			handle.get_torrent_info().file_at(files[path]);
+
 		stbuf->st_mode = S_IFREG | 0444;
-		stbuf->st_size = files[path].first.size;
+		stbuf->st_size = file.size;
 	}
 
 	pthread_mutex_unlock(&lock);
@@ -407,9 +408,7 @@ btfs_read(const char *path, char *buf, size_t size, off_t offset,
 
 	pthread_mutex_lock(&lock);
 
-	Read *r = new Read(buf, files[path].second, offset, std::min(
-		(libtorrent::size_type) size,
-		handle.get_torrent_info().file_at(files[path].second).size));
+	Read *r = new Read(buf, files[path], offset, size);
 
 	reads.push_back(r);
 
@@ -475,12 +474,14 @@ btfs_destroy(void *user_data) {
 	pthread_cancel(alert_thread);
 	pthread_join(alert_thread, NULL);
 
-	/**
-	 * Intentionally leaks "session" to make shutdown faster. The Session
-	 * class does tracker announces and graceful peer shutdown in the
-	 * destructor. We can live without that.
-	 */
-	//delete session;
+	std::string path = handle.save_path();
+
+	session->remove_torrent(handle,
+		params.keep ? 0 : libtorrent::session::delete_files);
+
+	delete session;
+
+	rmdir(path.c_str());
 
 	pthread_mutex_unlock(&lock);
 }
@@ -616,6 +617,8 @@ static const struct fuse_opt btfs_opts[] = {
 	BTFS_OPT("--help",        help,        1),
 	BTFS_OPT("-b",            browse_only, 1),
 	BTFS_OPT("--browse-only", browse_only, 1),
+	BTFS_OPT("-k",            keep,        1),
+	BTFS_OPT("--keep",        keep,        1),
 	FUSE_OPT_END
 };
 
@@ -678,6 +681,7 @@ main(int argc, char *argv[]) {
 		printf("    --version -v           show version information\n");
 		printf("    --help -h              show this message\n");
 		printf("    --browse-only -b       download metadata only\n");
+		printf("    --keep -k              keep files after unmount\n");
 		printf("\n");
 
 		// Let FUSE print more help
