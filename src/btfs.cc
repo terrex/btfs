@@ -338,6 +338,9 @@ btfs_getattr(const char *path, struct stat *stbuf) {
 
 	memset(stbuf, 0, sizeof (*stbuf));
 
+	stbuf->st_uid = getuid();
+	stbuf->st_gid = getgid();
+
 	if (strcmp(path, "/") == 0 || is_dir(path)) {
 		stbuf->st_mode = S_IFDIR | 0755;
 	} else {
@@ -669,7 +672,13 @@ main(int argc, char *argv[]) {
 
 	if (params.help) {
 		// Print usage
-		printf("usage: " PACKAGE " [options] metadata mountpoint\n\n");
+		printf("usage: " PACKAGE " [options] metadata mountpoint\n");
+		printf("\n");
+		printf("btfs options:\n");
+		printf("    --version -v           show version information\n");
+		printf("    --help -h              show this message\n");
+		printf("    --browse-only -b       download metadata only\n");
+		printf("\n");
 
 		// Let FUSE print more help
 		fuse_opt_add_arg(&args, "-ho");
