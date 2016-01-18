@@ -1,3 +1,9 @@
+btfs (2.5-1~trusty1) trusty; urgency=medium
+
+  * New upstream version
+
+ -- Johan Gunnarsson <johan.gunnarsson@gmail.com>  Mon, 18 Jan 2016 01:18:14 +0100
+
 btfs (2.4-1~trusty1) trusty; urgency=medium
 
   * New upstream version
