@@ -1,3 +1,9 @@
+btfs (2.4-1~vivid1) vivid; urgency=medium
+
+  * New upstream version
+
+ -- Johan Gunnarsson <johan.gunnarsson@gmail.com>  Mon, 18 Jan 2016 01:16:14 +0100
+
 btfs (2.3-1~vivid1) vivid; urgency=medium
 
   * New upstream version
