@@ -1,3 +1,9 @@
+btfs (2.6-1~wily1) wily; urgency=medium
+
+  * New upstream version
+
+ -- Johan Gunnarsson <johan.gunnarsson@gmail.com>  Sat, 30 Jan 2016 11:30:41 +0100
+
 btfs (2.5-1~wily1) wily; urgency=medium
 
   * New upstream version
