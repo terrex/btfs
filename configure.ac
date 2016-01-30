@@ -1,11 +1,15 @@
 AC_PREREQ([2.69])
-AC_INIT(btfs, 2.5, johan.gunnarsson@gmail.com)
+AC_INIT(btfs, 2.6, johan.gunnarsson@gmail.com, btfs, https://github.com/johang/btfs)
 AC_CONFIG_SRCDIR([src/btfs.cc])
 
 AM_INIT_AUTOMAKE
 
 # Checks for programs.
 AC_PROG_CXX
+
+AC_CONFIG_FILES([
+	man/Makefile
+])
 
 # Checks for libraries.
 PKG_CHECK_MODULES(FUSE, fuse >= 2.8.0)
