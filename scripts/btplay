@@ -1,51 +1,71 @@
 #!/usr/bin/python
 # copyright 2015 johan gunnarsson <johan.gunnarsson@gmail.com>
 
-import sys, os, os.path, tempfile, subprocess, time, shutil
+import sys, os, os.path, tempfile, subprocess, time, shutil, argparse
 
-if len(sys.argv) < 2:
-	print >> sys.stderr, "usage: btplay URI"
+players = [
+	"omxplayer --timeout 60",
+	"vlc --file-caching 10000",
+	"mpv --cache-min=1",
+	"mplayer --cache-min=1",
+]
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument("-p", "--player", action="store",
+	help="player to launch")
+parser.add_argument("URI", action="store",
+	help="magnet link or HTTP metadata URL to play")
+
+args = parser.parse_args()
+
+def which(x):
+	for d in os.getenv("PATH", "").split(":"):
+		if os.path.exists(os.path.join(d, x)):
+			return os.path.join(d, x)
+
+def find_player(players):
+	for player in players:
+		if which(player.split(" ", 1)[0]):
+			return player
+
+cmd = find_player([args.player] if args.player else players)
+
+if not cmd:
+	print >>sys.stderr, "Could not find a player"
 	sys.exit(1)
 
-def files(p, d):
-	fs = []
-	for dirpath, dnames, fnames in os.walk(os.path.join(p, d)):
+mountpoint = tempfile.mkdtemp(prefix="btplay-")
+
+ret = subprocess.call(("btfs", args.URI, mountpoint, ))
+
+def find_files(p):
+	for dirpath, dnames, fnames in os.walk(p):
 		for f in fnames:
-			fs.append(dirpath.split(os.sep) + [f])
-	return fs
+			yield os.path.join(dirpath, f)
 
-def is_media(x):
-	for z in x:
-		if z.lower() == "sample":
-			return False
-	for z in x:
-		for a in (".mp4", ".mkv", ".avi"):
-			if z.lower().endswith(a):
-				return True
-	return False
+def is_sample(x):
+	return "sample" in [x.lower() for x in x.split(os.sep)]
 
-d = tempfile.mkdtemp(prefix="btplay-")
-
-mountpoint = os.path.join(d, "mnt")
-playlist = os.path.join(d, "playlist.m3u")
-
-os.mkdir(mountpoint)
-
-ret = subprocess.call(("btfs", sys.argv[1], mountpoint, ))
+def is_video(x):
+	return any([x.lower().endswith(e) for e in (".mp4", ".mkv", ".avi")])
 
 if ret == 0:
 	try:
-		with open(playlist, "w") as p:
-			while len(os.listdir(mountpoint)) <= 0:
-				time.sleep(0.25)
+		while len(os.listdir(mountpoint)) <= 0:
+			time.sleep(0.25)
 
-			p.writelines(sorted([
-				"/%s\n" % os.path.join(*a)
-				for a in files(mountpoint, "")
-				if is_media(a)]))
+		media = sorted(filter(
+			lambda a: not is_sample(a) and is_video(a),
+			find_files(mountpoint)))
 
-		ret = subprocess.call(("vlc", "--file-caching", "10000",
-			playlist, ))
+		if len(media) > 0:
+			ret = subprocess.call(
+				"%s %s" % (cmd, " ".join(media)),
+				shell=True,
+				stdin=sys.stdin)
+		else:
+			print >>sys.stderr, "No video media found"
 	except KeyboardInterrupt:
 		ret = 1
 	except:
@@ -53,6 +73,6 @@ if ret == 0:
 	finally:
 		subprocess.call(("fusermount", "-u", mountpoint, ))
 
-shutil.rmtree(d)
+shutil.rmtree(mountpoint)
 
 sys.exit(ret)
