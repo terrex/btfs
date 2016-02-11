@@ -105,7 +105,7 @@ advance() {
 	jump(cursor, 0);
 }
 
-Read::Read(char *buf, int index, int offset, int size) {
+Read::Read(char *buf, int index, off_t offset, size_t size) {
 #if LIBTORRENT_VERSION_NUM < 10000
 	libtorrent::torrent_info ti = handle.get_torrent_info();
 #else
@@ -116,7 +116,7 @@ Read::Read(char *buf, int index, int offset, int size) {
 
 	while (size > 0 && offset < file.size) {
 		libtorrent::peer_request part = ti.map_file(index, offset,
-			size);
+			(int) size);
 
 		part.length = std::min(
 			ti.piece_size(part.piece) - part.start,
@@ -124,7 +124,7 @@ Read::Read(char *buf, int index, int offset, int size) {
 
 		parts.push_back(Part(part, buf));
 
-		size -= part.length;
+		size -= (size_t) part.length;
 		offset += part.length;
 		buf += part.length;
 	}
@@ -134,7 +134,7 @@ void Read::copy(int piece, char *buffer, int size) {
 	for (parts_iter i = parts.begin(); i != parts.end(); ++i) {
 		if (i->part.piece == piece && !i->filled)
 			i->filled = (memcpy(i->buf, buffer + i->part.start,
-				i->part.length)) != NULL;
+				(size_t) i->part.length)) != NULL;
 	}
 }
 
@@ -479,6 +479,10 @@ btfs_init(struct fuse_conn_info *conn) {
 	libtorrent::add_torrent_params *p = (libtorrent::add_torrent_params *)
 		fuse_get_context()->private_data;
 
+	int flags =
+		libtorrent::session::add_default_plugins |
+		libtorrent::session::start_default_features;
+
 	int alerts =
 		libtorrent::alert::tracker_notification |
 		libtorrent::alert::stats_notification |
@@ -494,9 +498,9 @@ btfs_init(struct fuse_conn_info *conn) {
 			LIBTORRENT_VERSION_MINOR,
 			0,
 			0),
-		std::make_pair(6881, 6889),
+		std::make_pair(params.min_port, params.max_port),
 		"0.0.0.0",
-		libtorrent::session::add_default_plugins,
+		flags,
 		alerts);
 
 	pthread_create(&alert_thread, NULL, alert_queue_loop,
@@ -511,8 +515,12 @@ btfs_init(struct fuse_conn_info *conn) {
 	se.strict_end_game_mode = false;
 	se.announce_to_all_trackers = true;
 	se.announce_to_all_tiers = true;
+	se.download_rate_limit = params.max_download_rate * 1024;
+	se.upload_rate_limit = params.max_upload_rate * 1024;
 
 	session->set_settings(se);
+	session->add_dht_router(std::make_pair("router.bittorrent.com", 6881));
+	session->add_dht_router(std::make_pair("router.utorrent.com", 6881));
 	session->async_add_torrent(*p);
 
 	pthread_mutex_unlock(&lock);
@@ -616,7 +624,7 @@ populate_metadata(libtorrent::add_torrent_params& p, const char *arg) {
 		libtorrent::error_code ec;
 
 		p.ti = new libtorrent::torrent_info((const char *) output.buf,
-			output.size, ec);
+			(int) output.size, ec);
 
 		if (ec)
 			RETV(fprintf(stderr, "Parse metadata failed: %s\n",
@@ -658,14 +666,18 @@ populate_metadata(libtorrent::add_torrent_params& p, const char *arg) {
 #define BTFS_OPT(t, p, v) { t, offsetof(struct btfs_params, p), v }
 
 static const struct fuse_opt btfs_opts[] = {
-	BTFS_OPT("-v",            version,     1),
-	BTFS_OPT("--version",     version,     1),
-	BTFS_OPT("-h",            help,        1),
-	BTFS_OPT("--help",        help,        1),
-	BTFS_OPT("-b",            browse_only, 1),
-	BTFS_OPT("--browse-only", browse_only, 1),
-	BTFS_OPT("-k",            keep,        1),
-	BTFS_OPT("--keep",        keep,        1),
+	BTFS_OPT("-v",                           version,              1),
+	BTFS_OPT("--version",                    version,              1),
+	BTFS_OPT("-h",                           help,                 1),
+	BTFS_OPT("--help",                       help,                 1),
+	BTFS_OPT("-b",                           browse_only,          1),
+	BTFS_OPT("--browse-only",                browse_only,          1),
+	BTFS_OPT("-k",                           keep,                 1),
+	BTFS_OPT("--keep",                       keep,                 1),
+	BTFS_OPT("--min-port=%lu",               min_port,             4),
+	BTFS_OPT("--max-port=%lu",               max_port,             4),
+	BTFS_OPT("--max-download-rate=%lu",      max_download_rate,    4),
+	BTFS_OPT("--max-upload-rate=%lu",        max_upload_rate,      4),
 	FUSE_OPT_END
 };
 
@@ -685,6 +697,22 @@ btfs_process_arg(void *data, const char *arg, int key,
 	}
 
 	return 1;
+}
+
+static void
+print_help() {
+	printf("usage: " PACKAGE " [options] metadata mountpoint\n");
+	printf("\n");
+	printf("btfs options:\n");
+	printf("    --version -v           show version information\n");
+	printf("    --help -h              show this message\n");
+	printf("    --browse-only -b       download metadata only\n");
+	printf("    --keep -k              keep files after unmount\n");
+	printf("    --min-port=N           start of listen port range\n");
+	printf("    --max-port=N           end of listen port range\n");
+	printf("    --max-download-rate=N  max download rate (in kB/s)\n");
+	printf("    --max-upload-rate=N    max upload rate (in kB/s)\n");
+	printf("\n");
 }
 
 int
@@ -719,15 +747,7 @@ main(int argc, char *argv[]) {
 	}
 
 	if (params.help) {
-		// Print usage
-		printf("usage: " PACKAGE " [options] metadata mountpoint\n");
-		printf("\n");
-		printf("btfs options:\n");
-		printf("    --version -v           show version information\n");
-		printf("    --help -h              show this message\n");
-		printf("    --browse-only -b       download metadata only\n");
-		printf("    --keep -k              keep files after unmount\n");
-		printf("\n");
+		print_help();
 
 		// Let FUSE print more help
 		fuse_opt_add_arg(&args, "-ho");
@@ -735,6 +755,19 @@ main(int argc, char *argv[]) {
 
 		return 0;
 	}
+
+	if (params.min_port == 0 && params.max_port == 0) {
+		// Default ports are the standard Bittorrent range
+		params.min_port = 6881;
+		params.max_port = 6889;
+	} else if (params.min_port == 0) {
+		params.min_port = 1024;
+	} else if (params.max_port == 0) {
+		params.max_port = 65535;
+	}
+
+	if (params.min_port > params.max_port)
+		RETV(fprintf(stderr, "Invalid port range\n"), -1);
 
 	std::string target;
 
