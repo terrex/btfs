@@ -51,7 +51,7 @@ private:
 class Read
 {
 public:
-	Read(char *buf, int index, int offset, int size);
+	Read(char *buf, int index, off_t offset, size_t size);
 
 	void copy(int piece, char *buffer, int size);
 
@@ -77,7 +77,7 @@ public:
 		free(buf);
 	}
 
-	bool expand(int n) {
+	bool expand(size_t n) {
 		return (buf = (char *) realloc((void *) buf, size += n)) != NULL;
 	}
 
@@ -116,6 +116,10 @@ struct btfs_params {
 	int help;
 	int browse_only;
 	int keep;
+	int min_port;
+	int max_port;
+	int max_download_rate;
+	int max_upload_rate;
 	const char *metadata;
 };
 
