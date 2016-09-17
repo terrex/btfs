@@ -29,6 +29,11 @@ along with BTFS.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <fuse.h>
 
+// The below pragma lines will silence lots of compiler warnings in the
+// libtorrent headers file. Not btfs' fault.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsign-conversion"
+#pragma GCC diagnostic ignored "-Wconversion"
 #include <libtorrent/torrent_info.hpp>
 #include <libtorrent/session.hpp>
 #include <libtorrent/alert.hpp>
@@ -36,12 +41,14 @@ along with BTFS.  If not, see <http://www.gnu.org/licenses/>.
 #include <libtorrent/alert_types.hpp>
 #include <libtorrent/magnet_uri.hpp>
 #include <libtorrent/version.hpp>
+#pragma GCC diagnostic pop
 
 #include <curl/curl.h>
 
 #include "btfs.h"
 
 #define RETV(s, v) { s; return v; };
+#define STRINGIFY(s) #s
 
 using namespace btfs;
 
@@ -112,9 +119,13 @@ Read::Read(char *buf, int index, off_t offset, size_t size) {
 	libtorrent::torrent_info ti = *handle.torrent_file();
 #endif
 
-	libtorrent::file_entry file = ti.file_at(index);
+#if LIBTORRENT_VERSION_NUM < 10100
+	int64_t file_size = ti.file_at(index).size;
+#else
+	int64_t file_size = ti.files().file_size(index);
+#endif
 
-	while (size > 0 && offset < file.size) {
+	while (size > 0 && offset < file_size) {
 		libtorrent::peer_request part = ti.map_file(index, offset,
 			(int) size);
 
@@ -200,7 +211,11 @@ setup() {
 
 		std::string parent("");
 
+#if LIBTORRENT_VERSION_NUM < 10100
 		char *p = strdup(ti.file_at(i).path.c_str());
+#else
+		char *p = strdup(ti.files().file_path(i).c_str());
+#endif
 
 		for (char *x = strtok(p, "/"); x; x = strtok(NULL, "/")) {
 			if (strlen(x) <= 0)
@@ -220,7 +235,11 @@ setup() {
 		free(p);
 
 		// Path <-> file index mapping
+#if LIBTORRENT_VERSION_NUM < 10100
 		files["/" + ti.file_at(i).path] = i;
+#else
+		files["/" + ti.files().file_path(i)] = i;
+#endif
 	}
 }
 
@@ -349,6 +368,7 @@ alert_queue_loop(void *data) {
 		if (!session->wait_for_alert(libtorrent::seconds(1)))
 			continue;
 
+#if LIBTORRENT_VERSION_NUM < 10100
 		std::deque<libtorrent::alert*> alerts;
 
 		session->pop_alerts(&alerts);
@@ -357,6 +377,16 @@ alert_queue_loop(void *data) {
 				alerts.begin(); i != alerts.end(); ++i) {
 			handle_alert(*i, (Log *) data);
 		}
+#else
+		std::vector<libtorrent::alert*> alerts;
+
+		session->pop_alerts(&alerts);
+
+		for (std::vector<libtorrent::alert*>::iterator i =
+				alerts.begin(); i != alerts.end(); ++i) {
+			handle_alert(*i, (Log *) data);
+		}
+#endif
 	}
 
 	pthread_cleanup_pop(1);
@@ -395,10 +425,14 @@ btfs_getattr(const char *path, struct stat *stbuf) {
 		libtorrent::torrent_info ti = *handle.torrent_file();
 #endif
 
-		libtorrent::file_entry file = ti.file_at(files[path]);
+#if LIBTORRENT_VERSION_NUM < 10100
+		int64_t file_size = ti.file_at(files[path]).size;
+#else
+		int64_t file_size = ti.files().file_size(files[path]);
+#endif
 
 		stbuf->st_mode = S_IFREG | 0444;
-		stbuf->st_size = file.size;
+		stbuf->st_size = file_size;
 	}
 
 	pthread_mutex_unlock(&lock);
@@ -497,6 +531,7 @@ btfs_init(struct fuse_conn_info *conn) {
 		libtorrent::alert::dht_notification |
 		libtorrent::alert::peer_notification;
 
+#if LIBTORRENT_VERSION_NUM < 10100
 	session = new libtorrent::session(
 		libtorrent::fingerprint(
 			"LT",
@@ -509,13 +544,6 @@ btfs_init(struct fuse_conn_info *conn) {
 		flags,
 		alerts);
 
-	pthread_create(&alert_thread, NULL, alert_queue_loop,
-		new Log(p->save_path + "/../log.txt"));
-
-#ifdef HAVE_PTHREAD_SETNAME_NP
-	pthread_setname_np(alert_thread, "alert");
-#endif
-
 	libtorrent::session_settings se = session->settings();
 
 	se.strict_end_game_mode = false;
@@ -527,7 +555,49 @@ btfs_init(struct fuse_conn_info *conn) {
 	session->set_settings(se);
 	session->add_dht_router(std::make_pair("router.bittorrent.com", 6881));
 	session->add_dht_router(std::make_pair("router.utorrent.com", 6881));
+	session->add_dht_router(std::make_pair("dht.transmissionbt.com", 6881));
 	session->async_add_torrent(*p);
+#else
+	libtorrent::settings_pack pack;
+
+	std::ostringstream interfaces;
+
+	// First port
+	interfaces << "0.0.0.0:" << params.min_port;
+
+	// Possibly more ports, but at most 5
+	for (int i = params.min_port + 1; i <= params.max_port &&
+			i < params.min_port + 5; i++)
+		interfaces << ",0.0.0.0:" << i;
+
+	std::string fingerprint =
+		"LT"
+		STRINGIFY(LIBTORRENT_VERSION_MAJOR)
+		STRINGIFY(LIBTORRENT_VERSION_MINOR)
+		"00";
+
+	pack.set_str(pack.listen_interfaces, interfaces.str());
+	pack.set_bool(pack.strict_end_game_mode, false);
+	pack.set_bool(pack.announce_to_all_trackers, true);
+	pack.set_bool(pack.announce_to_all_tiers, true);
+	pack.set_int(pack.download_rate_limit, params.max_download_rate * 1024);
+	pack.set_int(pack.upload_rate_limit, params.max_upload_rate * 1024);
+	pack.set_int(pack.alert_mask, alerts);
+
+	libtorrent::session session(pack, flags);
+
+	session.add_dht_router(std::make_pair("router.bittorrent.com", 6881));
+	session.add_dht_router(std::make_pair("router.utorrent.com", 6881));
+	session.add_dht_router(std::make_pair("dht.transmissionbt.com", 6881));
+	session.add_torrent(*p);
+#endif
+
+	pthread_create(&alert_thread, NULL, alert_queue_loop,
+		new Log(p->save_path + "/../log.txt"));
+
+#ifdef HAVE_PTHREAD_SETNAME_NP
+	pthread_setname_np(alert_thread, "alert");
+#endif
 
 	pthread_mutex_unlock(&lock);
 
@@ -633,8 +703,9 @@ populate_metadata(libtorrent::add_torrent_params& p, const char *arg) {
 		p.ti = new libtorrent::torrent_info((const char *) output.buf,
 			(int) output.size, ec);
 #else
-		p.ti = boost::make_shared<libtorrent::torrent_info>((const char *) output.buf,
-			(int) output.size, ec);
+		p.ti = boost::make_shared<libtorrent::torrent_info>(
+			(const char *) output.buf, (int) output.size,
+			boost::ref(ec));
 #endif
 
 		if (ec)
@@ -662,7 +733,8 @@ populate_metadata(libtorrent::add_torrent_params& p, const char *arg) {
 #if LIBTORRENT_VERSION_NUM < 10100
 		p.ti = new libtorrent::torrent_info(r, ec);
 #else
-		p.ti = boost::make_shared<libtorrent::torrent_info>(r, ec);
+		p.ti = boost::make_shared<libtorrent::torrent_info>(r,
+			boost::ref(ec));
 #endif
 
 		free(r);
