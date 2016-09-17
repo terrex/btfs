@@ -1,5 +1,5 @@
 AC_PREREQ([2.69])
-AC_INIT(btfs, 2.9, johan.gunnarsson@gmail.com, btfs, https://github.com/johang/btfs)
+AC_INIT(btfs, 2.10, johan.gunnarsson@gmail.com, btfs, https://github.com/johang/btfs)
 AC_CONFIG_SRCDIR([src/btfs.cc])
 
 AM_INIT_AUTOMAKE
@@ -22,5 +22,8 @@ AC_TYPE_SIZE_T
 
 # Checks for library functions.
 AC_CHECK_FUNCS([memset mkdir realpath strdup])
+
+# Check for unportable pthread_setname_np()
+AC_CHECK_LIB(pthread, pthread_setname_np)
 
 AC_OUTPUT(Makefile src/Makefile scripts/Makefile)
