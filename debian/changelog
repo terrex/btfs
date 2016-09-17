@@ -1,3 +1,9 @@
+btfs (2.11-1~xenial1) xenial; urgency=medium
+
+  * New upstream version
+
+ -- Johan Gunnarsson <johan.gunnarsson@gmail.com>  Sat, 17 Sep 2016 19:21:37 +0200
+
 btfs (2.10-1~xenial1) xenial; urgency=medium
 
   * New upstream version
