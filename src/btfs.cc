@@ -69,6 +69,9 @@ std::map<std::string,std::set<std::string> > dirs;
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t signal_cond = PTHREAD_COND_INITIALIZER;
 
+// Time used as "last modified" time
+time_t time_of_mount;
+
 static struct btfs_params params;
 
 static bool
@@ -343,7 +346,9 @@ handle_alert(libtorrent::alert *a, Log *log) {
 		break;
 	}
 
+#if LIBTORRENT_VERSION_NUM < 10100
 	delete a;
+#endif
 }
 
 
@@ -415,6 +420,7 @@ btfs_getattr(const char *path, struct stat *stbuf) {
 
 	stbuf->st_uid = getuid();
 	stbuf->st_gid = getgid();
+	stbuf->st_mtime = time_of_mount;
 
 	if (strcmp(path, "/") == 0 || is_dir(path)) {
 		stbuf->st_mode = S_IFDIR | 0755;
@@ -514,6 +520,8 @@ static void *
 btfs_init(struct fuse_conn_info *conn) {
 	pthread_mutex_lock(&lock);
 
+	time_of_mount = time(NULL);
+
 	libtorrent::add_torrent_params *p = (libtorrent::add_torrent_params *)
 		fuse_get_context()->private_data;
 
@@ -584,12 +592,12 @@ btfs_init(struct fuse_conn_info *conn) {
 	pack.set_int(pack.upload_rate_limit, params.max_upload_rate * 1024);
 	pack.set_int(pack.alert_mask, alerts);
 
-	libtorrent::session session(pack, flags);
+	session = new libtorrent::session(pack, flags);
 
-	session.add_dht_router(std::make_pair("router.bittorrent.com", 6881));
-	session.add_dht_router(std::make_pair("router.utorrent.com", 6881));
-	session.add_dht_router(std::make_pair("dht.transmissionbt.com", 6881));
-	session.add_torrent(*p);
+	session->add_dht_router(std::make_pair("router.bittorrent.com", 6881));
+	session->add_dht_router(std::make_pair("router.utorrent.com", 6881));
+	session->add_dht_router(std::make_pair("dht.transmissionbt.com", 6881));
+	session->add_torrent(*p);
 #endif
 
 	pthread_create(&alert_thread, NULL, alert_queue_loop,
@@ -823,8 +831,8 @@ main(int argc, char *argv[]) {
 		params.help = 1;
 
 	if (params.version) {
-		// Print version
 		printf(PACKAGE " version: " VERSION "\n");
+		printf("libtorrent version: " LIBTORRENT_VERSION "\n");
 
 		// Let FUSE print more versions
 		fuse_opt_add_arg(&args, "--version");
